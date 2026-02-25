@@ -1,0 +1,556 @@
+{
+	"name": "Crypto Trading Signal Analyzer",
+	"nodes": [
+		{
+			"parameters": {
+				"rule": {
+					"interval": [
+						{
+							"field": "minutes",
+							"minutesInterval": 5
+						}
+					]
+				},
+				"triggerOn": "manual"
+			},
+			"id": "trigger-manual",
+			"name": "Manual Trigger / Timer",
+			"type": "n8n-nodes-base.scheduleTrigger",
+			"typeVersion": 1,
+			"position": [100, 300]
+		},
+		{
+			"parameters": {
+				"data": {
+					"mode": "manual",
+					"value": "={{ $json.symbol }}",
+					"variableName": "symbol"
+				},
+				"data2": {
+					"mode": "manual",
+					"value": "ETHUSDT",
+					"variableName": "defaultSymbol"
+				}
+			},
+			"id": "set-symbol",
+			"name": "Set Symbol",
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [300, 300]
+		},
+		{
+			"parameters": {
+				"url": "https://api.binance.com/api/v3/klines",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "symbol",
+							"value": "={{ $json.symbol }}"
+						},
+						{
+							"name": "interval",
+							"value": "1m"
+						},
+						{
+							"name": "limit",
+							"value": 200
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "binance-candles-1m",
+			"name": "Binance Candles 1m",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [500, 100]
+		},
+		{
+			"parameters": {
+				"url": "https://api.binance.com/api/v3/klines",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "symbol",
+							"value": "={{ $json.symbol }}"
+						},
+						{
+							"name": "interval",
+							"value": "5m"
+						},
+						{
+							"name": "limit",
+							"value": 200
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "binance-candles-5m",
+			"name": "Binance Candles 5m",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [500, 200]
+		},
+		{
+			"parameters": {
+				"url": "https://api.binance.com/api/v3/klines",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "symbol",
+							"value": "={{ $json.symbol }}"
+						},
+						{
+							"name": "interval",
+							"value": "1h"
+						},
+						{
+							"name": "limit",
+							"value": 200
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "binance-candles-1h",
+			"name": "Binance Candles 1h",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [500, 300]
+		},
+		{
+			"parameters": {
+				"url": "https://api.binance.com/api/v3/depth",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "symbol",
+							"value": "={{ $json.symbol }}"
+						},
+						{
+							"name": "limit",
+							"value": 100
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "binance-orderbook",
+			"name": "Binance Order Book",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [500, 400]
+		},
+		{
+			"parameters": {
+				"url": "https://api.binance.com/api/v3/ticker/24hr",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "symbol",
+							"value": "={{ $json.symbol }}"
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "binance-ticker",
+			"name": "Binance 24h Ticker",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [500, 500]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Анализ свечей 1m\nconst candles1m = $input.first().json;\n\nfunction parseCandles(data) {\n  return data.map(c => ({\n    time: c[0],\n    open: parseFloat(c[1]),\n    high: parseFloat(c[2]),\n    low: parseFloat(c[3]),\n    close: parseFloat(c[4]),\n    volume: parseFloat(c[5])\n  }));\n}\n\nfunction analyzeCandles(candles) {\n  if (!candles || candles.length === 0) return { direction: 'NEUTRAL', score: 0, patterns: [] };\n  \n  const lastCandle = candles[candles.length - 1];\n  const prevCandle = candles[candles.length - 2] || lastCandle;\n  \n  let bullishScore = 0;\n  let bearishScore = 0;\n  const patterns = [];\n  \n  // Объём\n  const avgVol = candles.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;\n  const volumeConfirm = lastCandle.volume > avgVol * 1.5;\n  if (volumeConfirm) {\n    if (lastCandle.close > lastCandle.open) bullishScore += 2;\n    else bearishScore += 2;\n  }\n  \n  // Тело свечи\n  const body = Math.abs(lastCandle.close - lastCandle.open);\n  const range = lastCandle.high - lastCandle.low;\n  const bodyRatio = range > 0 ? body / range : 0;\n  \n  if (bodyRatio > 0.7) {\n    if (lastCandle.close > lastCandle.open) {\n      bullishScore += 3;\n      patterns.push('bull_marubozu');\n    } else {\n      bearishScore += 3;\n      patterns.push('bear_marubozu');\n    }\n  } else if (bodyRatio < 0.3) {\n    patterns.push('doji');\n  }\n  \n  // Тени\n  const upperShadow = lastCandle.high - Math.max(lastCandle.open, lastCandle.close);\n  const lowerShadow = Math.min(lastCandle.open, lastCandle.close) - lastCandle.low;\n  \n  if (lowerShadow > body * 2 && lowerShadow > upperShadow) {\n    bullishScore += 2;\n    patterns.push('hammer');\n  }\n  if (upperShadow > body * 2 && upperShadow > lowerShadow) {\n    bearishScore += 2;\n    patterns.push('shooting_star');\n  }\n  \n  // RSI (приблизительный)\n  let rsi = 50;\n  const gains = [];\n  const losses = [];\n  for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) {\n    const change = candles[i].close - candles[i-1].close;\n    if (change > 0) gains.push(change);\n    else losses.push(Math.abs(change));\n  }\n  if (gains.length > 0 && losses.length > 0) {\n    const avgGain = gains.reduce((a,b) => a+b, 0) / 14;\n    const avgLoss = losses.reduce((a,b) => 0, 0) / 14;\n    rsi = 100 - (100 / (1 + avgGain / (avgLoss || 1)));\n  }\n  \n  if (rsi < 30) bullishScore += 2;\n  else if (rsi > 70) bearishScore += 2;\n  \n  // Тренд по EMA\n  const ema9 = candles.slice(-9).reduce((s, c) => s + c.close, 0) / 9;\n  const ema21 = candles.slice(-21).reduce((s, c) => s + c.close, 0) / 21;\n  \n  if (ema9 > ema21) {\n    bullishScore += 2;\n  } else {\n    bearishScore += 2;\n  }\n  \n  const totalScore = bullishScore + bearishScore;\n  let direction = 'NEUTRAL';\n  if (bullishScore > bearishScore * 1.3 && totalScore > 4) direction = 'LONG';\n  else if (bearishScore > bullishScore * 1.3 && totalScore > 4) direction = 'SHORT';\n  \n  return {\n    direction,\n    score: Math.max(bullishScore, bearishScore),\n    patterns,\n    rsi: Math.round(rsi),\n    volumeConfirm,\n    lastPrice: lastCandle.close,\n    emaTrend: ema9 > ema21 ? 'bullish' : 'bearish'\n  };\n}\n\nconst candles = parseCandles(candles1m);\nconst analysis = analyzeCandles(candles);\n\nreturn [{ json: { ...analysis, timeframe: '1m' } }];"
+			},
+			"id": "analyze-1m",
+			"name": "Analyze 1m",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [700, 100]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Анализ свечей 5m\nconst candles5m = $input.first().json;\n\nfunction parseCandles(data) {\n  return data.map(c => ({\n    time: c[0],\n    open: parseFloat(c[1]),\n    high: parseFloat(c[2]),\n    low: parseFloat(c[3]),\n    close: parseFloat(c[4]),\n    volume: parseFloat(c[5])\n  }));\n}\n\nfunction analyzeCandles(candles) {\n  if (!candles || candles.length === 0) return { direction: 'NEUTRAL', score: 0, patterns: [] };\n  \n  const lastCandle = candles[candles.length - 1];\n  \n  let bullishScore = 0;\n  let bearishScore = 0;\n  const patterns = [];\n  \n  const avgVol = candles.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;\n  const volumeConfirm = lastCandle.volume > avgVol * 1.5;\n  if (volumeConfirm) {\n    if (lastCandle.close > lastCandle.open) bullishScore += 2;\n    else bearishScore += 2;\n  }\n  \n  const body = Math.abs(lastCandle.close - lastCandle.open);\n  const range = lastCandle.high - lastCandle.low;\n  const bodyRatio = range > 0 ? body / range : 0;\n  \n  if (bodyRatio > 0.7) {\n    if (lastCandle.close > lastCandle.open) {\n      bullishScore += 3;\n      patterns.push('bull_marubozu');\n    } else {\n      bearishScore += 3;\n      patterns.push('bear_marubozu');\n    }\n  }\n  \n  // Паттерны на 5m\n  if (candles.length >= 3) {\n    const c1 = candles[candles.length - 3];\n    const c2 = candles[candles.length - 2];\n    const c3 = lastCandle;\n    \n    // Morning Star\n    if (c1.close < c1.open && c3.close > c3.open && c2.close < c2.open &&\n        c2.close < (c1.open + c1.close) / 2 && c3.close > (c1.open + c3.open) / 2) {\n      bullishScore += 3;\n      patterns.push('morning_star');\n    }\n    \n    // Evening Star\n    if (c1.close > c1.open && c3.close < c3.open && c2.close > c2.open &&\n        c2.close > (c1.open + c1.close) / 2 && c3.close < (c1.open + c3.open) / 2) {\n      bearishScore += 3;\n      patterns.push('evening_star');\n    }\n  }\n  \n  let rsi = 50;\n  const gains = [];\n  const losses = [];\n  for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) {\n    const change = candles[i].close - candles[i-1].close;\n    if (change > 0) gains.push(change);\n    else losses.push(Math.abs(change));\n  }\n  if (gains.length > 0 && losses.length > 0) {\n    const avgGain = gains.reduce((a,b) => a+b, 0) / 14;\n    const avgLoss = losses.reduce((a,b) => 0, 0) / 14;\n    rsi = 100 - (100 / (1 + avgGain / (avgLoss || 1)));\n  }\n  \n  if (rsi < 30) bullishScore += 2;\n  else if (rsi > 70) bearishScore += 2;\n  \n  const ema9 = candles.slice(-9).reduce((s, c) => s + c.close, 0) / 9;\n  const ema21 = candles.slice(-21).reduce((s, c) => s + c.close, 0) / 21;\n  \n  if (ema9 > ema21) bullishScore += 2;\n  else bearishScore += 2;\n  \n  const totalScore = bullishScore + bearishScore;\n  let direction = 'NEUTRAL';\n  if (bullishScore > bearishScore * 1.3 && totalScore > 4) direction = 'LONG';\n  else if (bearishScore > bullishScore * 1.3 && totalScore > 4) direction = 'SHORT';\n  \n  return {\n    direction,\n    score: Math.max(bullishScore, bearishScore),\n    patterns,\n    rsi: Math.round(rsi),\n    volumeConfirm,\n    lastPrice: lastCandle.close,\n    emaTrend: ema9 > ema21 ? 'bullish' : 'bearish'\n  };\n}\n\nconst candles = parseCandles(candles5m);\nconst analysis = analyzeCandles(candles);\n\nreturn [{ json: { ...analysis, timeframe: '5m' } }];"
+			},
+			"id": "analyze-5m",
+			"name": "Analyze 5m",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [700, 200]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Анализ свечей 1h\nconst candles1h = $input.first().json;\n\nfunction parseCandles(data) {\n  return data.map(c => ({\n    time: c[0],\n    open: parseFloat(c[1]),\n    high: parseFloat(c[2]),\n    low: parseFloat(c[3]),\n    close: parseFloat(c[4]),\n    volume: parseFloat(c[5])\n  }));\n}\n\nfunction analyzeCandles(candles) {\n  if (!candles || candles.length === 0) return { direction: 'NEUTRAL', score: 0, patterns: [] };\n  \n  const lastCandle = candles[candles.length - 1];\n  \n  let bullishScore = 0;\n  let bearishScore = 0;\n  const patterns = [];\n  \n  const avgVol = candles.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;\n  const volumeConfirm = lastCandle.volume > avgVol * 1.5;\n  if (volumeConfirm) {\n    if (lastCandle.close > lastCandle.open) bullishScore += 2;\n    else bearishScore += 2;\n  }\n  \n  const body = Math.abs(lastCandle.close - lastCandle.open);\n  const range = lastCandle.high - lastCandle.low;\n  const bodyRatio = range > 0 ? body / range : 0;\n  \n  if (bodyRatio > 0.7) {\n    if (lastCandle.close > lastCandle.open) {\n      bullishScore += 3;\n      patterns.push('bull_marubozu');\n    } else {\n      bearishScore += 3;\n      patterns.push('bear_marubozu');\n    }\n  }\n  \n  let rsi = 50;\n  const gains = [];\n  const losses = [];\n  for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) {\n    const change = candles[i].close - candles[i-1].close;\n    if (change > 0) gains.push(change);\n    else losses.push(Math.abs(change));\n  }\n  if (gains.length > 0 && losses.length > 0) {\n    const avgGain = gains.reduce((a,b) => a+b, 0) / 14;\n    const avgLoss = losses.reduce((a,b) => 0, 0) / 14;\n    rsi = 100 - (100 / (1 + avgGain / (avgLoss || 1)));\n  }\n  \n  if (rsi < 30) bullishScore += 2;\n  else if (rsi > 70) bearishScore += 2;\n  \n  const ema9 = candles.slice(-9).reduce((s, c) => s + c.close, 0) / 9;\n  const ema21 = candles.slice(-21).reduce((s, c) => s + c.close, 0) / 21;\n  const ema50 = candles.slice(-50).reduce((s, c) => s + c.close, 0) / 50;\n  \n  if (ema9 > ema21 && ema21 > ema50) bullishScore += 3;\n  else if (ema9 < ema21 && ema21 < ema50) bearishScore += 3;\n  \n  const totalScore = bullishScore + bearishScore;\n  let direction = 'NEUTRAL';\n  if (bullishScore > bearishScore * 1.3 && totalScore > 4) direction = 'LONG';\n  else if (bearishScore > bullishScore * 1.3 && totalScore > 4) direction = 'SHORT';\n  \n  return {\n    direction,\n    score: Math.max(bullishScore, bearishScore),\n    patterns,\n    rsi: Math.round(rsi),\n    volumeConfirm,\n    lastPrice: lastCandle.close,\n    emaTrend: ema9 > ema21 ? 'bullish' : 'bearish'\n  };\n}\n\nconst candles = parseCandles(candles1h);\nconst analysis = analyzeCandles(candles);\n\nreturn [{ json: { ...analysis, timeframe: '1h' } }];"
+			},
+			"id": "analyze-1h",
+			"name": "Analyze 1h",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [700, 300]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Анализ стакана (Order Book)\nconst orderBook = $input.first().json;\n\nfunction analyzeOrderBook(ob) {\n  if (!ob || !ob.bids || !ob.asks || ob.bids.length === 0) {\n    return { direction: 'NEUTRAL', score: 0, spreadPct: 999, domScore: 0, imbalance: 0 };\n  }\n  \n  const bestBid = parseFloat(ob.bids[0][0]);\n  const bestAsk = parseFloat(ob.asks[0][0]);\n  const midPrice = (bestBid + bestAsk) / 2;\n  const spread = bestAsk - bestBid;\n  const spreadPct = (spread / midPrice) * 100;\n  \n  let bullishScore = 0;\n  let bearishScore = 0;\n  \n  // DOM Score\n  const bid1 = parseFloat(ob.bids[0][1]);\n  const ask1 = parseFloat(ob.asks[0][1]);\n  const domScore = bid1 + ask1 > 0 ? (bid1 - ask1) / (bid1 + ask1) : 0;\n  \n  if (domScore > 0.3) bullishScore += 3;\n  else if (domScore > 0.1) bullishScore += 1;\n  if (domScore < -0.3) bearishScore += 3;\n  else if (domScore < -0.1) bearishScore += 1;\n  \n  // Imbalance\n  let totalBid = 0;\n  let totalAsk = 0;\n  \n  for (let i = 0; i < Math.min(20, ob.bids.length); i++) {\n    totalBid += parseFloat(ob.bids[i][1]);\n  }\n  for (let i = 0; i < Math.min(20, ob.asks.length); i++) {\n    totalAsk += parseFloat(ob.asks[i][1]);\n  }\n  \n  const imbalance = totalBid + totalAsk > 0 ? (totalBid - totalAsk) / (totalBid + totalAsk) : 0;\n  \n  if (imbalance > 0.3) bullishScore += 2;\n  else if (imbalance > 0.15) bullishScore += 1;\n  if (imbalance < -0.3) bearishScore += 2;\n  else if (imbalance < -0.15) bearishScore += 1;\n  \n  // Walls\n  const avgBidVol = totalBid / Math.min(20, ob.bids.length);\n  const avgAskVol = totalAsk / Math.min(20, ob.asks.length);\n  const bidWalls = ob.bids.filter(b => parseFloat(b[1]) > avgBidVol * 3).length;\n  const askWalls = ob.asks.filter(a => parseFloat(a[1]) > avgAskVol * 3).length;\n  \n  if (bidWalls > askWalls && bidWalls > 0) bullishScore += 2;\n  if (askWalls > bidWalls && askWalls > 0) bearishScore += 2;\n  \n  // Spread\n  if (spreadPct < 0.05 && domScore > 0.1) bullishScore += 1;\n  if (spreadPct < 0.05 && domScore < -0.1) bearishScore += 1;\n  \n  const totalScore = bullishScore + bearishScore;\n  let direction = 'NEUTRAL';\n  if (bullishScore > bearishScore * 1.3 && totalScore > 3) direction = 'LONG';\n  else if (bearishScore > bullishScore * 1.3 && totalScore > 3) direction = 'SHORT';\n  \n  return {\n    direction,\n    score: Math.max(bullishScore, bearishScore),\n    spreadPct: parseFloat(spreadPct.toFixed(4)),\n    domScore: parseFloat(domScore.toFixed(3)),\n    imbalance: parseFloat(imbalance.toFixed(3)),\n    bidWalls,\n    askWalls\n  };\n}\n\nconst analysis = analyzeOrderBook(orderBook);\n\nreturn [{ json: analysis }];"
+			},
+			"id": "analyze-orderbook",
+			"name": "Analyze Order Book",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [700, 400]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Группировка всех анализов\nconst analysis1m = $input.item.json['{{ $json.analysis1m }}'] || {};\nconst analysis5m = $input.item.json['{{ $json.analysis5m }}'] || {};\nconst analysis1h = $input.item.json['{{ $json.analysis1h }}'] || {};\nconst orderBook = $input.item.json['{{ $json.orderBook }}'] || {};\nconst ticker = $input.item.json['{{ $json.ticker }}'] || {};\n\n// Получаем данные из предыдущих нод\nconst items = $input.all();\n\nlet analysis1mData = {};\nlet analysis5mData = {};\nlet analysis1hData = {};\nlet orderBookData = {};\nlet tickerData = {};\n\nfor (const item of items) {\n  if (item.json.timeframe === '1m') analysis1mData = item.json;\n  if (item.json.timeframe === '5m') analysis5mData = item.json;\n  if (item.json.timeframe === '1h') analysis1hData = item.json;\n  if (item.json.spreadPct !== undefined && item.json.domScore !== undefined) orderBookData = item.json;\n  if (item.json.lastPrice !== undefined && !item.json.timeframe) tickerData = item.json;\n}\n\n// Группировка\nconst group = {\n  timestamp: new Date().toISOString(),\n  symbol: '{{ $json.symbol }}',\n  analysis: {\n    '1m': analysis1mData,\n    '5m': analysis5mData,\n    '1h': analysis1hData\n  },\n  orderBook: orderBookData,\n  ticker: tickerData\n};\n\n// Итоговый анализ\nlet longCount = 0;\nlet shortCount = 0;\nconst directions = [analysis1mData.direction, analysis5mData.direction, analysis1hData.direction, orderBookData.direction];\n\nfor (const dir of directions) {\n  if (dir === 'LONG') longCount++;\n  if (dir === 'SHORT') shortCount++;\n}\n\nlet finalDirection = 'NEUTRAL';\nlet confidence = 0;\n\nif (longCount >= 2 && longCount > shortCount) {\n  finalDirection = 'LONG';\n  confidence = Math.min(0.9, 0.5 + longCount * 0.15);\n} else if (shortCount >= 2 && shortCount > longCount) {\n  finalDirection = 'SHORT';\n  confidence = Math.min(0.9, 0.5 + shortCount * 0.15);\n}\n\n// Проверка спреда\nif (orderBookData.spreadPct > 0.1) {\n  confidence *= 0.7;\n}\n\ngroup.final = {\n  direction: finalDirection,\n  confidence: Math.round(confidence * 100) / 100,\n  longCount,\n  shortCount,\n  recommendation: finalDirection === 'NEUTRAL' \n    ? 'Подождать лучших условий' \n    : `Рекомендуется ${finalDirection === 'LONG' ? 'покупка' : 'продажа'}`\n};\n\nreturn [{ json: group }];"
+			},
+			"id": "group-analysis",
+			"name": "Group Analysis",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [900, 300]
+		},
+		{
+			"parameters": {
+				"url": "https://newsapi.org/v2/everything",
+				"queryParameters": {
+					"parameters": [
+						{
+							"name": "q",
+							"value": "={{ $json.symbol.replace('USDT', '') }} crypto"
+						},
+						{
+							"name": "language",
+							"value": "en"
+						},
+						{
+							"name": "sortBy",
+							"value": "publishedAt"
+						},
+						{
+							"name": "pageSize",
+							"value": 5
+						}
+					]
+				},
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "news-api",
+			"name": "News API",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [900, 100]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Анализ новостей\nconst news = $input.first().json;\n\nlet sentiment = 'neutral';\nlet score = 0;\n\nif (news.articles && news.articles.length > 0) {\n  const keywords = {\n    bullish: ['surge', 'bull', 'rise', 'gain', 'growth', 'positive', 'breakout', 'rally'],\n    bearish: ['crash', 'bear', 'fall', 'drop', 'negative', 'dump', 'decline', 'sell']\n  };\n  \n  let bullishCount = 0;\n  let bearishCount = 0;\n  \n  for (const article of news.articles) {\n    const title = (article.title || '').toLowerCase();\n    const desc = (article.description || '').toLowerCase();\n    const text = title + ' ' + desc;\n    \n    for (const word of keywords.bullish) {\n      if (text.includes(word)) bullishCount++;\n    }\n    for (const word of keywords.bearish) {\n      if (text.includes(word)) bearishCount++;\n    }\n  }\n  \n  if (bullishCount > bearishCount) {\n    sentiment = 'bullish';\n    score = Math.min(3, bullishCount - bearishCount);\n  } else if (bearishCount > bullishCount) {\n    sentiment = 'bearish';\n    score = Math.min(3, bearishCount - bullishCount);\n  }\n}\n\nreturn [{ json: {\n  sentiment,\n  score,\n  articles: news.articles || []\n} }];"
+			},
+			"id": "analyze-news",
+			"name": "Analyze News",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [1100, 100]
+		},
+		{
+			"parameters": {
+				"method": "POST",
+				"url": "https://api.anthropic.com/v1/messages",
+				"authentication": "genericCredentialType",
+				"genericAuthType": "Header Auth",
+				"sendHeaders": true,
+				"headerParameters": {
+					"parameters": [
+						{
+							"name": "x-api-key",
+							"value": "YOUR_ANTHROPIC_API_KEY"
+						},
+						{
+							"name": "anthropic-version",
+							"value": "2023-06-01"
+						},
+						{
+							"name": "content-type",
+							"value": "application/json"
+						}
+					]
+				},
+				"specifyBody": "json",
+				"jsonBody": "{\n  \"model\": \"claude-3-5-sonnet-20241022\",\n  \"max_tokens\": 1000,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Проанализируй торговый сигнал для {{ $json.symbol }} и дай рекомендацию.\\n\\nАнализ 1m: Direction={{ $json.analysis.1m.direction }}, Score={{ $json.analysis.1m.score }}, RSI={{ $json.analysis.1m.rsi }}, EMA={{ $json.analysis.1m.emaTrend }}\\n\\nАнализ 5m: Direction={{ $json.analysis.5m.direction }}, Score={{ $json.analysis.5m.score }}, RSI={{ $json.analysis.5m.rsi }}, EMA={{ $json.analysis.5m.emaTrend }}\\n\\nАнализ 1h: Direction={{ $json.analysis.1h.direction }}, Score={{ $json.analysis.1h.score }}, RSI={{ $json.analysis.1h.rsi }}, EMA={{ $json.analysis.1h.emaTrend }}\\n\\nСтакан: Direction={{ $json.orderBook.direction }}, Score={{ $json.orderBook.score }}, Spread={{ $json.orderBook.spreadPct }}%\\n\\nНовости: Sentiment={{ $json.newsSentiment }}\\n\\nТекущая цена: {{ $json.ticker.lastPrice || 'N/A' }}\\n\\nДай краткое заключение: OPEN_LONG, OPEN_SHORT или WAIT. Если WAIT - объясни почему.\"\n    }\n  ]\n}",
+				"options": {
+					"timeout": 60000
+				}
+			},
+			"id": "ai-analysis",
+			"name": "AI Analysis (Claude)",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [1300, 300]
+		},
+		{
+			"parameters": {
+				"functionCode": "// Финальная группировка с AI\nconst analysis = $input.item.json;\nconst aiResponse = $input.all().find(i => i.json.content);\n\nlet aiRecommendation = 'WAIT';\nif (aiResponse && aiResponse.json.content) {\n  const content = JSON.stringify(aiResponse.json.content).toUpperCase();\n  if (content.includes('OPEN_LONG')) aiRecommendation = 'LONG';\n  else if (content.includes('OPEN_SHORT')) aiRecommendation = 'SHORT';\n  else aiRecommendation = 'WAIT';\n}\n\n// Объединяем все данные\nconst final = {\n  ...analysis,\n  aiRecommendation,\n  aiResponse: aiResponse ? aiResponse.json.content : null,\n  timestamp: new Date().toISOString()\n};\n\n// Риск-менеджмент\nconst userRisk = {{ $json.userRiskPercent || 2 }}; // Процент риска от депозита\nconst minConfidence = {{ $json.minConfidence || 0.65 }};\n\nlet shouldTrade = false;\nlet reason = '';\n\nif (analysis.final.confidence >= minConfidence && aiRecommendation !== 'WAIT') {\n  shouldTrade = true;\n  reason = 'Сигнал соответствует критериям риск-менеджмента';\n} else if (analysis.final.confidence < minConfidence) {\n  reason = `Низкая уверенность: ${Math.round(analysis.final.confidence * 100)}% < ${minConfidence * 100}%`;\n} else {\n  reason = 'AI рекомендует подождать';\n}\n\nfinal.riskManagement = {\n  shouldTrade,\n  reason,\n  confidence: analysis.final.confidence,\n  aiRecommendation,\n  recommendedAction: shouldTrade \n    ? `Открыть позицию ${analysis.final.direction}` \n    : 'Подождать лучших условий'\n};\n\nreturn [{ json: final }];"
+			},
+			"id": "final-decision",
+			"name": "Final Decision",
+			"type": "n8n-nodes-base.function",
+			"typeVersion": 1,
+			"position": [1500, 300]
+		},
+		{
+			"parameters": {
+				"chatId": "{{ $json.userTelegramId || '@your_channel' }}",
+				"text": "📊 *Анализ {{ $json.symbol }}*\\n\\n🕐 Timeframe: 1m / 5m / 1h\\n💰 Цена: ${{ $json.ticker.lastPrice || 'N/A' }}\\n\\n*Анализ:*\n• 1m: {{ $json.analysis.1m.direction }} ({{ $json.analysis.1m.score }}pts, RSI {{ $json.analysis.1m.rsi }})\\n• 5m: {{ $json.analysis.5m.direction }} ({{ $json.analysis.5m.score }}pts, RSI {{ $json.analysis.5m.rsi }})\\n• 1h: {{ $json.analysis.1h.direction }} ({{ $json.analysis.1h.score }}pts, RSI {{ $json.analysis.1h.rsi }})\\n\\n📊 Стакан: {{ $json.orderBook.direction }}\\n💹 Спред: {{ $json.orderBook.spreadPct }}%\\n\\n*Итог:*\n🎯 Направление: *{{ $json.final.direction }}*\\n📈 Уверенность: *{{ $json.final.confidence }}%*\\n🤖 AI: {{ $json.aiRecommendation }}\\n\\n{{ $json.riskManagement.recommendedAction }}",
+				"additionalFields": {
+					"parse_mode": "Markdown"
+				}
+			},
+			"id": "telegram-notify",
+			"name": "Telegram Notify",
+			"type": "n8n-nodes-base.telegram",
+			"typeVersion": 1.2,
+			"position": [1700, 300]
+		},
+		{
+			"parameters": {
+				"method": "POST",
+				"url": "https://clabx.ru/api/trading-signal",
+				"sendHeaders": true,
+				"headerParameters": {
+					"parameters": [
+						{
+							"name": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"name": "X-API-Key",
+							"value": "a8f3k2m9xQpL1nR7vY4wZ0cB6hJ5tU"
+						}
+					]
+				},
+				"specifyBody": "json",
+				"jsonBody": "{\n  \"symbol\": \"{{ $json.symbol }}\",\n  \"direction\": \"{{ $json.final.direction }}\",\n  \"confidence\": \"{{ $json.final.confidence }}\",\n  \"entryPrice\": \"{{ $json.ticker.lastPrice }}\",\n  \"analysis\": \"{{ $json.analysis }}\",\n  \"orderBook\": \"{{ $json.orderBook }}\",\n  \"aiRecommendation\": \"{{ $json.aiRecommendation }}\",\n  \"shouldTrade\": \"{{ $json.riskManagement.shouldTrade }}\",\n  \"reason\": \"{{ $json.riskManagement.reason }}\",\n  \"timestamp\": \"{{ $json.timestamp }}\"\n}",
+				"options": {
+					"timeout": 30000
+				}
+			},
+			"id": "send-to-site",
+			"name": "Send to Site (clabx.ru)",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [1700, 500]
+		}
+	],
+	"connections": {
+		"Manual Trigger / Timer": {
+			"main": [
+				[
+					{
+						"node": "Set Symbol",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Set Symbol": {
+			"main": [
+				[
+					{
+						"node": "Binance Candles 1m",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Binance Candles 5m",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Binance Candles 1h",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Binance Order Book",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Binance 24h Ticker",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Binance Candles 1m": {
+			"main": [
+				[
+					{
+						"node": "Analyze 1m",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Binance Candles 5m": {
+			"main": [
+				[
+					{
+						"node": "Analyze 5m",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Binance Candles 1h": {
+			"main": [
+				[
+					{
+						"node": "Analyze 1h",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Binance Order Book": {
+			"main": [
+				[
+					{
+						"node": "Analyze Order Book",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Analyze 1m": {
+			"main": [
+				[
+					{
+						"node": "Group Analysis",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Analyze 5m": {
+			"main": [
+				[
+					{
+						"node": "Group Analysis",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Analyze 1h": {
+			"main": [
+				[
+					{
+						"node": "Group Analysis",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Analyze Order Book": {
+			"main": [
+				[
+					{
+						"node": "Group Analysis",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Group Analysis": {
+			"main": [
+				[
+					{
+						"node": "AI Analysis (Claude)",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"News API": {
+			"main": [
+				[
+					{
+						"node": "Analyze News",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Analyze News": {
+			"main": [
+				[
+					{
+						"node": "AI Analysis (Claude)",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"AI Analysis (Claude)": {
+			"main": [
+				[
+					{
+						"node": "Final Decision",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Final Decision": {
+			"main": [
+				[
+					{
+						"node": "Telegram Notify",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Send to Site (clabx.ru)",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"staticData": null,
+	"tags": [],
+	"triggerCount": 1,
+	"updatedAt": "2026-02-25T00:00:00.000Z",
+	"versionId": "1"
+}

@@ -1,0 +1,178 @@
+{
+  "name": "Crypto Trading Full",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $input.first().json.body || {};\nconst query = $input.first().json.query || {};\n\nconst symbol = (body.symbol || query.symbol || 'ETHUSDT').toUpperCase();\nconst userRisk = body.userRiskPercent || 2;\nconst minConfidence = body.minConfidence || 0.65;\n\nreturn [{ json: { symbol, userRisk, minConfidence } }];"
+      },
+      "id": "parse-request",
+      "name": "Parse Request",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/klines",
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "={{ $json.symbol }}" },
+            { "name": "interval", "value": "1m" },
+            { "name": "limit", "value": 200 }
+          ]
+        }
+      },
+      "id": "candles-1m",
+      "name": "Candles 1m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 100]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/klines",
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "={{ $json.symbol }}" },
+            { "name": "interval", "value": "5m" },
+            { "name": "limit", "value": 200 }
+          ]
+        }
+      },
+      "id": "candles-5m",
+      "name": "Candles 5m",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 220]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/klines",
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "={{ $json.symbol }}" },
+            { "name": "interval", "value": "1h" },
+            { "name": "limit", "value": 200 }
+          ]
+        }
+      },
+      "id": "candles-1h",
+      "name": "Candles 1h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 340]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/depth",
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "={{ $json.symbol }}" },
+            { "name": "limit", "value": 100 }
+          ]
+        }
+      },
+      "id": "orderbook",
+      "name": "Order Book",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 460]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/ticker/price",
+        "queryParameters": {
+          "parameters": [
+            { "name": "symbol", "value": "={{ $json.symbol }}" }
+          ]
+        }
+      },
+      "id": "price",
+      "name": "Current Price",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 580]
+    },
+    {
+      "parameters": {
+        "functionCode": "const items = $input.all();\nconst inputData = items.find(i => i.json.symbol)?.json || {};\nconst symbol = inputData.symbol || 'ETHUSDT';\n\nfunction parse(data) {\n  return data.map(c => ({\n    open: parseFloat(c[1]), high: parseFloat(c[2]),\n    low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5])\n  }));\n}\n\nfunction analyze(candles) {\n  if (!candles || candles.length < 20) return { direction: 'NEUTRAL', score: 0, rsi: 50 };\n  \n  const c = candles[candles.length - 1];\n  let bull = 0, bear = 0;\n  \n  const avgV = candles.slice(-20).reduce((s, x) => s + x.volume, 0) / 20;\n  if (c.volume > avgV * 1.5) c.close > c.open ? bull += 2 : bear += 2;\n  \n  const body = Math.abs(c.close - c.open);\n  const range = c.high - c.low;\n  if (range > 0 && body / range > 0.7) c.close > c.open ? bull += 3 : bear += 3;\n  \n  const lower = Math.min(c.open, c.close) - c.low;\n  const upper = c.high - Math.max(c.open, c.close);\n  if (lower > body * 2) bull += 2;\n  if (upper > body * 2) bear += 2;\n  \n  let gains = [], losses = [];\n  for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) {\n    const d = candles[i].close - candles[i-1].close;\n    d > 0 ? gains.push(d) : losses.push(-d);\n  }\n  const avgG = gains.length ? gains.reduce((a,b)=>a+b,0)/14 : 0;\n  const avgL = losses.length ? losses.reduce((a,b)=>a+b,0)/14 : 0;\n  const rsi = 100 - (100 / (1 + avgG/(avgL||1)));\n  if (rsi < 30) bull += 2; else if (rsi > 70) bear += 2;\n  \n  const ema9 = candles.slice(-9).reduce((s, x) => s + x.close, 0) / 9;\n  const ema21 = candles.slice(-21).reduce((s, x) => s + x.close, 0) / 21;\n  if (ema9 > ema21) bull += 2; else bear += 2;\n  \n  const total = bull + bear;\n  let dir = 'NEUTRAL';\n  if (bull > bear * 1.3 && total > 4) dir = 'LONG';\n  else if (bear > bull * 1.3 && total > 4) dir = 'SHORT';\n  \n  return { direction: dir, score: Math.max(bull, bear), rsi: Math.round(rsi) };\n}\n\nfunction analyzeOB(ob) {\n  if (!ob?.bids || !ob.asks) return { direction: 'NEUTRAL', score: 0, spread: 0 };\n  const bid1 = parseFloat(ob.bids[0][1]);\n  const ask1 = parseFloat(ob.asks[0][1]);\n  const dom = (bid1 - ask1) / (bid1 + ask1);\n  const score = dom > 0.3 ? 3 : dom > 0.1 ? 1 : dom < -0.3 ? -3 : dom < -0.1 ? -1 : 0;\n  const bestBid = parseFloat(ob.bids[0][0]);\n  const bestAsk = parseFloat(ob.asks[0][0]);\n  const spread = ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2) * 100);\n  return { direction: score > 0 ? 'LONG' : score < 0 ? 'SHORT' : 'NEUTRAL', score: Math.abs(score), spread: spread.toFixed(4) };\n}\n\n// Найти данные\nlet c1m = [], c5m = [], c1h = [], ob = {}, price = null;\nfor (const item of items) {\n  if (item.json[0]?.[1]) c1m = parse(item.json);\n  else if (item.json[0]?.[4]) {\n    if (c1m.length === 0) c1m = parse(item.json);\n    else if (c5m.length === 0) c5m = parse(item.json);\n  }\n  if (item.json.bids) ob = item.json;\n  if (item.json.price) price = parseFloat(item.json.price);\n}\n\nconst a1m = analyze(c1m);\nconst a5m = analyze(c5m);\nconst a1h = analyze(c1h);\nconst aob = analyzeOB(ob);\n\nconst dirs = [a1m.direction, a5m.direction, a1h.direction, aob.direction];\nconst longs = dirs.filter(d => d === 'LONG').length;\nconst shorts = dirs.filter(d => d === 'SHORT').length;\n\nlet finalDir = 'WAIT';\nlet conf = 0;\nif (longs >= 2) { finalDir = 'LONG'; conf = Math.min(0.85, 0.5 + longs * 0.12); }\nelse if (shorts >= 2) { finalDir = 'SHORT'; conf = Math.min(0.85, 0.5 + shorts * 0.12); }\n\nconst minConf = inputData.minConfidence || 0.65;\nconst shouldTrade = finalDir !== 'WAIT' && conf >= minConf;\n\nreturn [{ json: {\n  symbol,\n  currentPrice: price,\n  analysis: { '1m': a1m, '5m': a5m, '1h': a1h, orderbook: aob },\n  final: { direction: finalDir, confidence: Math.round(conf * 100) / 100 },\n  riskManagement: {\n    shouldTrade,\n    action: shouldTrade ? `Открыть ${finalDir}` : 'Подождать',\n    reason: conf < minConf ? `Уверенность ${Math.round(conf*100)}% < ${minConf*100}%` : ''\n  },\n  timestamp: new Date().toISOString()\n} }];"
+      },
+      "id": "analyze",
+      "name": "Analyze",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "{{ $json.chatId || '@clabx_trading' }}",
+        "text": "📊 *Анализ {{ $json.symbol }}*\\n\\n💰 Цена: ${{ $json.currentPrice }}\\n\\n*Таймфреймы:*\\n• 1m: {{ $json.analysis.1m.direction }} ({{ $json.analysis.1m.score }}pts, RSI {{ $json.analysis.1m.rsi }})\\n• 5m: {{ $json.analysis.5m.direction }} ({{ $json.analysis.5m.score }}pts)\\n• 1h: {{ $json.analysis.1h.direction }} ({{ $json.analysis.1h.score }}pts)\\n\\n📊 Стакан: {{ $json.orderbook.direction }}\\n💹 Спред: {{ $json.orderbook.spread }}%\\n\\n🎯 *Итог:* {{ $json.final.direction }}\\n📈 Уверенность: {{ $json.final.confidence }}%\\n\\n{{ $json.riskManagement.action }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "telegram",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://clabx.ru/api/trading-signal",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [\n          { "name": "Content-Type", "value": "application/json" },\n          { "name": "X-API-Key", "value": "a8f3k2m9xQpL1nR7vY4wZ0cB6hJ5tU" }\n        ]},
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}"
+      },
+      "id": "to-site",
+      "name": "Send to Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1100, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Parse Request", "type": "main", "index": 0 }]] },
+    "Parse Request": { "main": [[
+      { "node": "Candles 1m", "type": "main", "index": 0 },
+      { "node": "Candles 5m", "type": "main", "index": 0 },
+      { "node": "Candles 1h", "type": "main", "index": 0 },
+      { "node": "Order Book", "type": "main", "index": 0 },
+      { "node": "Current Price", "type": "main", "index": 0 }
+    ]]},
+    "Candles 1m": { "main": [[{ "node": "Analyze", "type": "main", "index": 0 }]] },
+    "Candles 5m": { "main": [[{ "node": "Analyze", "type": "main", "index": 0 }]] },
+    "Candles 1h": { "main": [[{ "node": "Analyze", "type": "main", "index": 0 }]] },
+    "Order Book": { "main": [[{ "node": "Analyze", "type": "main", "index": 0 }]] },
+    "Current Price": { "main": [[{ "node": "Analyze", "type": "main", "index": 0 }]] },
+    "Analyze": { "main": [[
+      { "node": "Telegram", "type": "main", "index": 0 },
+      { "node": "Send to Site", "type": "main", "index": 0 },
+      { "node": "Respond", "type": "main", "index": 0 }
+    ]]}
+  }
+}
